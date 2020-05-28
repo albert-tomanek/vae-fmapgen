@@ -32,6 +32,7 @@ class MNISTAutoEncoder:
 		repr = self.encoder(out)
 		qtz  = Lambda(lambda x: tf.one_hot(K.argmax(x), repr_size))(repr)
 		out  = self.decoder(qtz)
+		out  = Lambda(lambda x: x * 255)(out)
 
 		self.model = Model(inp, [out, repr])
 		self.model.compile('rmsprop', loss=lambda true, out: mean_squared_error(true, out[0]))	# out = (pred, repr)
@@ -42,10 +43,9 @@ class MNISTAutoEncoder:
 		out = Reshape((96, 96, 3))(out)
 
 		out = Conv2D(64, (8, 8), strides=1, padding='same')(out)	# -> 28x28x64
-		out = Dropout(0.3)(out)
 		out = Conv2D(repr_size, 1, padding='same')(out)	# -> 28x28x1
 		out = BatchNormalization()(out)
-		out = Activation('sigmoid')(out)
+		# out = Activation('sigmoid')(out)
 
 		m=Model(inp, out)
 		# m.summary()
@@ -57,6 +57,8 @@ class MNISTAutoEncoder:
 		out = Conv2DTranspose(64, (3, 3), strides=1, padding='same')(out)	# -> 28x28x64
 		out = Conv2DTranspose(3, (8, 8), strides=1, padding='same')(out)		# -> 28x28x1
 		# out = Dense(28*28)(out)
+		out = BatchNormalization()(out)
+		out = Activation('sigmoid')(out)
 		out = Reshape((96, 96, 3))(out)
 
 		m=Model(inp, out)
@@ -127,7 +129,7 @@ fmap_palette = np.array([
 	[255, 255, 255]
 ])
 
-if __name__ == "__main__":
+def main():
 	model = MNISTAutoEncoder()
 
 	if input('Load ENcoder? [y/N]: ') == 'y':
@@ -143,3 +145,6 @@ if __name__ == "__main__":
 	finally:
 		model.encoder.save_weights('weights_enc.h5')
 		model.decoder.save_weights('weights_dec.h5')
+
+if __name__ == "__main__":
+	main()
