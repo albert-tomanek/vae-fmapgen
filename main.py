@@ -1,7 +1,8 @@
 from typing import Tuple, List, Dict
-import random
+import random, os
 import numpy as np
 import matplotlib.pyplot as plt
+from PIL import Image, ImageDraw
 
 import keras
 import keras.backend as K
@@ -27,7 +28,7 @@ class MNISTAutoEncoder:
 		self.encoder = self.create_encoder(repr_size)
 		self.decoder = self.create_decoder(repr_size)
 
-		inp  = out = Input(shape=(28, 28))
+		inp  = out = Input(shape=(96, 96, 3))
 		repr = self.encoder(out)
 		qtz  = Lambda(lambda x: tf.one_hot(K.argmax(x), repr_size))(repr)
 		out  = self.decoder(qtz)
@@ -37,10 +38,11 @@ class MNISTAutoEncoder:
 
 	@staticmethod
 	def create_encoder(repr_size):
-		inp = out = Input(shape=(28, 28))
-		out = Reshape((28, 28, 1))(out)
+		inp = out = Input(shape=(96, 96, 3))
+		out = Reshape((96, 96, 3))(out)
 
-		out = Conv2D(64, (4, 4), strides=1, padding='same')(out)	# -> 28x28x64
+		out = Conv2D(64, (8, 8), strides=1, padding='same')(out)	# -> 28x28x64
+		out = Dropout(0.3)(out)
 		out = Conv2D(repr_size, 1, padding='same')(out)	# -> 28x28x1
 		out = BatchNormalization()(out)
 		out = Activation('sigmoid')(out)
@@ -51,11 +53,11 @@ class MNISTAutoEncoder:
 
 	@staticmethod
 	def create_decoder(repr_size):
-		inp = out = Input(shape=(28, 28, repr_size,))					# -> 28x28x8
-		out = Conv2DTranspose(64, 1, strides=1, padding='same')(out)	# -> 28x28x64
-		out = Conv2DTranspose(1, 1, strides=1, padding='same')(out)		# -> 28x28x1
+		inp = out = Input(shape=(96, 96, repr_size,))					# -> 28x28x8
+		out = Conv2DTranspose(64, (3, 3), strides=1, padding='same')(out)	# -> 28x28x64
+		out = Conv2DTranspose(3, (8, 8), strides=1, padding='same')(out)		# -> 28x28x1
 		# out = Dense(28*28)(out)
-		out = Reshape((28, 28))(out)
+		out = Reshape((96, 96, 3))(out)
 
 		m=Model(inp, out)
 		m.summary()
@@ -85,9 +87,26 @@ class MNISTAutoEncoder:
 
 	@staticmethod
 	def datagen():
+		textures = [Image.open('textures/' + file) for file in os.listdir('textures') if file.endswith('.jpg')]
 		while True:
-			imgs = x_train[np.array([random.randint(0, len(x_train)-1) for i in range(BATCH_SIZE)])]
-			yield imgs, [imgs, np.zeros((BATCH_SIZE, 28, 28, 8))]	# The repr is a placeholder and isn't actually used to calculate loss.
+			batch = np.zeros((BATCH_SIZE, 96, 96, 3))
+			for i in range(BATCH_SIZE):
+				img = np.array(random.choice(textures).copy())
+				for _ in range(6):
+					polygon = [(random.randint(0, 64), random.randint(0, 96)) for _ in range(3)]	# Random triangle
+					mask = Image.new('1', (96, 96), 0)
+					ImageDraw.Draw(mask).polygon(polygon, fill=1, outline=1)
+					mask = np.array(mask, dtype=np.uint8).repeat(3, axis=-1).reshape((96, 96, 3))
+					overlay = np.array(random.choice(textures))
+					img = img * (1 - mask) + overlay * mask
+
+				batch[i] = img
+			yield batch, [batch, np.zeros((BATCH_SIZE, 96, 96, 8))]	# The repr is a placeholder and isn't actually used to calculate loss.
+
+	# @staticmethod
+	# def triangle(max_x, max_y):
+	# 	t = []
+	#
 
 fmap_palette = np.array([
 	[  0,   0,   0],
