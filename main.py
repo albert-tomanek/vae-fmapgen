@@ -12,6 +12,7 @@ from keras.layers import Layer, Input, Lambda, concatenate, Dense, Dropout, LSTM
 from keras.layers.core import Reshape, Activation
 from keras.callbacks import LambdaCallback
 from keras.losses import mean_squared_error
+from keras.optimizers import Adam
 
 import tensorflow as tf
 
@@ -22,25 +23,26 @@ import wandb
 wandb.init(project="vae-maskgen")
 
 BATCH_SIZE = 32
+repr_size = 8
 
 class MNISTAutoEncoder:
-	def __init__(self, repr_size=8):
+	def __init__(self):
 		self.encoder = self.create_encoder(repr_size)
 		self.decoder = self.create_decoder(repr_size)
 
-		inp  = out = Input(shape=(96, 96, 3))
+		inp  = out = Input(shape=(96, 96, 1))
 		repr = self.encoder(out)
 		qtz  = Lambda(lambda x: tf.one_hot(K.argmax(x), repr_size))(repr)
 		out  = self.decoder(qtz)
 		out  = Lambda(lambda x: x * 255)(out)
 
 		self.model = Model(inp, [out, repr])
-		self.model.compile('rmsprop', loss=lambda true, out: mean_squared_error(true, out[0]))	# out = (pred, repr)
+		self.model.compile(Adam(lr=10e-4), loss=lambda true, out: mean_squared_error(true, out[0]))	# out = (pred, repr)
 
 	@staticmethod
 	def create_encoder(repr_size):
-		inp = out = Input(shape=(96, 96, 3))
-		out = Reshape((96, 96, 3))(out)
+		inp = out = Input(shape=(96, 96, 1))
+		out = Reshape((96, 96, 1))(out)
 
 		out = Conv2D(64, (8, 8), strides=1, padding='same')(out)	# -> 28x28x64
 		out = Conv2D(repr_size, 1, padding='same')(out)	# -> 28x28x1
@@ -54,12 +56,12 @@ class MNISTAutoEncoder:
 	@staticmethod
 	def create_decoder(repr_size):
 		inp = out = Input(shape=(96, 96, repr_size,))					# -> 28x28x8
-		out = Conv2DTranspose(64, (3, 3), strides=1, padding='same')(out)	# -> 28x28x64
-		out = Conv2DTranspose(3, (8, 8), strides=1, padding='same')(out)		# -> 28x28x1
+		out = Conv2D(64, (3, 3), strides=1, padding='same')(out)	# -> 28x28x64
+		out = Conv2D(1, (8, 8), strides=1, padding='same')(out)		# -> 28x28x1
 		# out = Dense(28*28)(out)
 		out = BatchNormalization()(out)
 		out = Activation('sigmoid')(out)
-		out = Reshape((96, 96, 3))(out)
+		out = Reshape((96, 96, 1))(out)
 
 		m=Model(inp, out)
 		m.summary()
@@ -103,7 +105,10 @@ class MNISTAutoEncoder:
 					img = img * (1 - mask) + overlay * mask
 
 				batch[i] = img
-			yield batch, [batch, np.zeros((BATCH_SIZE, 96, 96, 8))]	# The repr is a placeholder and isn't actually used to calculate loss.
+			mean = np.mean(batch, -1)
+			mean = mean.repeat(1, -1).reshape(BATCH_SIZE, 96, 96, 1)
+			batch = mean
+			yield batch, [batch, np.zeros((BATCH_SIZE, 96, 96, repr_size))]	# The repr is a placeholder and isn't actually used to calculate loss.
 
 	# @staticmethod
 	# def triangle(max_x, max_y):
