@@ -168,7 +168,6 @@ class GANModel:
 			# Train VAE (generator) to fake
 			history = self.complete_model.fit(imgs[:HALF_BATCH], np.ones(HALF_BATCH))
 			wandb.log({"gen_loss": history.history['loss'][0]})
-			import pdb; pdb.set_trace()
 
 			if i % 4 == 0:
 				self.vae.log_example(datagen)
