@@ -32,6 +32,12 @@ def identical_shuffle(a: np.array, b: np.array):
 	np.random.shuffle(order)
 	return a[order], b[order]
 
+@tf.custom_gradient
+def quantize_fn(x):
+	def grad(dy):
+		return dy * 0	# Gradient is *probably* 0
+	return tf.one_hot(tf.argmax(x, axis=-1), repr_size), grad
+
 class AutoEncoder:
 	def __init__(self):
 		self.encoder = self.create_encoder(repr_size)
@@ -39,7 +45,7 @@ class AutoEncoder:
 
 		inp  = out = Input(shape=(*imgdims, 1))
 		repr = self.encoder(out)
-		qtz  = Lambda(lambda x: tf.one_hot(tf.argmax(x, axis=-1), repr_size))(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
+		qtz  = Lambda(quantize_fn)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
 		out  = self.decoder(qtz)
 		out  = Lambda(lambda x: x * 255)(out)
 
@@ -101,7 +107,7 @@ class AutoEncoder:
 			for i in range(BATCH_SIZE):
 				img = np.array(random.choice(textures).copy())
 				for _ in range(4):
-					polygon = [(random.randint(0, 64), random.randint(0, 96)) for _ in range(3)]	# Random triangle
+					polygon = AutoEncoder.triangle(*imgdims)
 					mask = Image.new('1', imgdims, 0)
 					ImageDraw.Draw(mask).polygon(polygon, fill=1, outline=1)
 					mask = np.array(mask, dtype=np.uint8).repeat(3, axis=-1).reshape((*imgdims, 3))
@@ -114,10 +120,14 @@ class AutoEncoder:
 			batch = mean
 			yield batch, [batch, np.zeros((BATCH_SIZE, *imgdims, repr_size))]	# The repr is a placeholder and isn't actually used to calculate loss.
 
-	# @staticmethod
-	# def triangle(max_x, max_y):
-	# 	t = []
-	#
+	@staticmethod
+	def triangle(max_x, max_y):
+		min_sz=max_x // 3
+		t = []
+		t.append((random.randint(0, max_x - min_sz), random.randint(0, max_y - min_sz)))
+		t.append((t[0][0] + random.randint(min_sz, max_x - t[0][0]), t[0][1] + random.randint(min_sz, max_y - t[0][1])))
+		t.append((random.randint(t[0][1], t[1][1]), random.randint(t[0][0], t[1][0])))
+		return t
 
 class GANModel:
 	def __init__(self):
