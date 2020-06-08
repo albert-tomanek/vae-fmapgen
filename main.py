@@ -11,7 +11,7 @@ from keras.preprocessing import image as kp_image
 from keras.layers import Layer, Input, Lambda, concatenate, Dense, Dropout, LSTM, GaussianNoise, LeakyReLU, BatchNormalization, Conv2D, MaxPooling2D, Conv2DTranspose, DepthwiseConv2D, Flatten
 from keras.layers.core import Reshape, Activation
 from keras.callbacks import LambdaCallback
-from keras.losses import mean_squared_error
+from keras.losses import mean_squared_error, binary_crossentropy
 from keras.optimizers import Adam
 
 import tensorflow as tf
@@ -32,11 +32,22 @@ def identical_shuffle(a: np.array, b: np.array):
 	np.random.shuffle(order)
 	return a[order], b[order]
 
+def shift(a: np.array, n):
+	b = a.copy()
+	b[n:] = b[:-n]
+	b[:n] = a[-n:]
+	return b
+
 @tf.custom_gradient
 def quantize_fn(x):
 	def grad(dy):
 		return dy * 0	# Gradient is *probably* 0
 	return tf.one_hot(tf.argmax(x, axis=-1), repr_size), grad
+
+def img_variety(x):
+	a = tf.reshape(x, [-1])					# Make it a 1D array
+	b = tf.concat([tf.zeros((1), dtype=x.dtype), a[:-1]], axis=-1)	# Shift by 1
+	return tf.reduce_sum(tf.square(tf.math.tanh(tf.cast(a - b, tf.float32))))	# The tanh is there to make all differences greater than 0 the same size.
 
 class AutoEncoder:
 	def __init__(self):
@@ -141,7 +152,7 @@ class GANModel:
 		disc = self.discriminator(fake)
 
 		self.complete_model = Model(inp, disc, name='vae_gan')
-		self.complete_model.compile('adam', loss='binary_crossentropy')
+		self.complete_model.compile('adam', loss=lambda true, out: binary_crossentropy(true, out) + img_variety(tf.argmax(out[1])))
 
 	@staticmethod
 	def create_discriminator():
