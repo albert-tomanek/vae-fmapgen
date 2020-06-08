@@ -23,7 +23,7 @@ import wandb
 wandb.init(project="vae-maskgen")
 
 BATCH_SIZE = 32
-EPOCHS = 120
+EPOCHS = 240
 repr_size = 8
 imgdims = (96, 96)
 
@@ -39,11 +39,11 @@ class AutoEncoder:
 
 		inp  = out = Input(shape=(*imgdims, 1))
 		repr = self.encoder(out)
-		qtz  = Lambda(lambda x: tf.one_hot(tf.argmax(x, axis=-1), repr_size) * x)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
+		qtz  = Lambda(lambda x: tf.one_hot(tf.argmax(x, axis=-1), repr_size))(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
 		out  = self.decoder(qtz)
 		out  = Lambda(lambda x: x * 255)(out)
 
-		self.model = Model(inp, [out, repr])
+		self.model = Model(inp, [out, repr], name='vae')
 		self.model.compile(Adam(lr=10e-4), loss=lambda true, out: mean_squared_error(true, out[0]))	# out = (pred, repr)
 
 	@staticmethod
@@ -56,7 +56,7 @@ class AutoEncoder:
 		out = BatchNormalization()(out)
 		# out = Activation('sigmoid')(out)
 
-		return Model(inp, out)
+		return Model(inp, out, name='encoder')
 
 	@staticmethod
 	def create_decoder(repr_size):
@@ -68,7 +68,7 @@ class AutoEncoder:
 		out = Activation('sigmoid')(out)
 		out = Reshape((*imgdims, 1))(out)
 
-		return Model(inp, out)
+		return Model(inp, out, name='decoder')
 
 	def train(self, gen):
 		test_batch = next(gen)[0]
@@ -123,30 +123,25 @@ class GANModel:
 	def __init__(self):
 		self.vae = AutoEncoder()
 		self.discriminator = self.create_discriminator()
+		self.discriminator.compile('adam', loss='binary_crossentropy')
 
 		inp = Input(shape=(*imgdims, 1))
 		fake, repr = self.vae.model(inp)
+		self.discriminator.trainable = False
 		disc = self.discriminator(fake)
 
-		self.complete_model = Model(inp, disc)
+		self.complete_model = Model(inp, disc, name='vae_gan')
 		self.complete_model.compile('adam', loss='binary_crossentropy')
-
-		inp = Input(shape=(*imgdims, 1))
-		disc = self.discriminator(inp)
-
-		self.discriminator_model = Model(inp, disc)
-		self.discriminator_model.compile('adam', loss='binary_crossentropy')
 
 	@staticmethod
 	def create_discriminator():
 		inp = Input(shape=(*imgdims, 1))
-		out = Conv2D(4*repr_size, kernel_size=(8, 8), strides=2, padding='same')(inp)
-		out = Conv2D(4*repr_size, kernel_size=(4, 4), strides=2, padding='same')(out)
-		out = Conv2D(8*repr_size, kernel_size=(4, 4), strides=2, padding='same')(out)
+		out = Conv2D(2*repr_size, kernel_size=(8, 8), strides=4)(inp)
+		out = Conv2D(4*repr_size, kernel_size=(4, 4), strides=2)(out)
 		out = Flatten()(out)
 		out = Dense(1, activation='sigmoid')(out)
 
-		return Model(inp, out)
+		return Model(inp, out, name='disc')
 
 	def train(self, datagen):				# The generater is expected to output in the format of AutoEncoder.datagen
 		for i in range(EPOCHS):
@@ -162,14 +157,14 @@ class GANModel:
 			y_jumbled[:HALF_BATCH] = 1
 			x_jumbled, y_jumbled = identical_shuffle(x_jumbled, y_jumbled)
 
-			history = self.discriminator_model.fit(x_jumbled, y_jumbled)
+			history = self.discriminator.fit(x_jumbled, y_jumbled)
 			wandb.log({"disc_loss": history.history['loss'][0]})
 
 			# Train VAE (generator) to fake
-			history = self.complete_model.fit(imgs[:HALF_BATCH], np.ones(HALF_BATCH))
+			history = self.complete_model.fit(imgs[:BATCH_SIZE], np.ones(BATCH_SIZE))
 			wandb.log({"gen_loss": history.history['loss'][0]})
 
-			if i % 4 == 0:
+			if i % 8 == 0:
 				self.vae.log_example(datagen)
 
 fmap_palette = np.array([
@@ -199,7 +194,8 @@ def main():
 	if input('Load DEcoder? [y/N]: ') == 'y':
 		model.vae.decoder.load_weights('weights_dec.h5')
 
-	# model.discriminator.summary()
+	model.discriminator.summary()
+	model.complete_model.summary()
 
 	try:
 		model.train(model.vae.datagen())
