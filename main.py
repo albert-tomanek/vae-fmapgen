@@ -1,5 +1,6 @@
 from typing import Tuple, List, Dict
 import random, os
+from math import log10
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw
@@ -15,12 +16,6 @@ from keras.losses import mean_squared_error, binary_crossentropy
 from keras.optimizers import Adam
 
 import tensorflow as tf
-
-from keras.datasets import fashion_mnist, mnist
-(x_train, y_train), (x_test, y_test) = mnist.load_data()
-
-import wandb
-wandb.init(project="vae-maskgen")
 
 BATCH_SIZE = 32
 EPOCHS = 240
@@ -103,6 +98,7 @@ class AutoEncoder:
 			"img_x": wandb.Image(sample_img),
 			"img_map": wandb.Image(fmap_palette[np.argmax(repr, axis=-1)]),
 			"img_y": wandb.Image(out),
+			"repr_variance": float(img_variety(repr))
 		})
 
 	def on_batch_end(self, batch, logs):
@@ -177,6 +173,7 @@ class GANModel:
 			y_jumbled = np.zeros((BATCH_SIZE))
 			y_jumbled[:HALF_BATCH] = 1
 			x_jumbled, y_jumbled = identical_shuffle(x_jumbled, y_jumbled)
+			# disc_batch_size = BATCH_SIZE / log10(vae_loss) - log10(disc_loss)
 
 			history = self.discriminator.fit(x_jumbled, y_jumbled)
 			wandb.log({"disc_loss": history.history['loss'][0]})
@@ -208,12 +205,14 @@ fmap_palette = np.array([
 ])
 
 def main():
-	model = GANModel()
-
-	if input('Load ENcoder? [y/N]: ') == 'y':
+	opts = input('Load Encoder? Decoder? Discriminator? [nnn]: ')
+	opts = opts if opts != '' else 'nnn'
+	if opts[0] == 'y':
 		model.vae.encoder.load_weights('weights_enc.h5')
-	if input('Load DEcoder? [y/N]: ') == 'y':
+	if opts[1] == 'y':
 		model.vae.decoder.load_weights('weights_dec.h5')
+	if opts[2] == 'y':
+		model.discriminator.load_weights('weights_disc.h5')
 
 	model.discriminator.summary()
 	model.complete_model.summary()
@@ -221,8 +220,11 @@ def main():
 	try:
 		model.train(model.vae.datagen())
 	finally:
-		model.vae.encoder.save_weights('weights_enc.h5')
-		model.vae.decoder.save_weights('weights_dec.h5')
+		model.vae.encoder.save('weights_enc.h5')
+		model.vae.decoder.save('weights_dec.h5')
+		model.discriminator.save('weights_disc.h5')
 
 if __name__ == "__main__":
+	import wandb
+	wandb.init(project="vae-maskgen")
 	main()
