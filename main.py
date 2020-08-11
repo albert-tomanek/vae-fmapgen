@@ -5,20 +5,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw
 
-import keras
-import keras.backend as K
-from keras import Model
-from keras.preprocessing import image as kp_image
-from keras.layers import Layer, Input, Lambda, concatenate, Dense, Dropout, LSTM, GaussianNoise, LeakyReLU, BatchNormalization, Conv2D, MaxPooling2D, Conv2DTranspose, DepthwiseConv2D, Flatten
-from keras.layers.core import Reshape, Activation
-from keras.callbacks import LambdaCallback
-from keras.losses import mean_squared_error, binary_crossentropy
-from keras.optimizers import Adam
-
 import tensorflow as tf
 
+from tensorflow import keras
+import tensorflow.keras.backend as K
+from tensorflow.keras import Model
+from tensorflow.keras.preprocessing import image as kp_image
+from tensorflow.keras.layers import Layer, Input, Lambda, concatenate, Dense, Dropout, LSTM, GaussianNoise, LeakyReLU, BatchNormalization, Conv2D, MaxPooling2D, Conv2DTranspose, DepthwiseConv2D, Flatten, Reshape, Activation
+from tensorflow.keras.callbacks import LambdaCallback
+from tensorflow.keras.losses import mean_squared_error, binary_crossentropy
+from tensorflow.keras.optimizers import Adam
+
 BATCH_SIZE = 32
-EPOCHS = 240
+EPOCHS = 2400
 repr_size = 8
 imgdims = (96, 96)
 
@@ -51,31 +50,30 @@ class AutoEncoder:
 
 		inp  = out = Input(shape=(*imgdims, 1))
 		repr = self.encoder(out)
-		qtz  = Lambda(quantize_fn)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
+		# qtz  = Lambda(quantize_fn)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
+		qtz  = Lambda(lambda x: K.cast_to_floatx(K.argmax(x)), output_shape=(*imgdims, 1))(repr)
 		out  = self.decoder(qtz)
 		out  = Lambda(lambda x: x * 255)(out)
-
 		self.model = Model(inp, [out, repr], name='vae')
-		self.model.compile(Adam(lr=10e-4), loss=lambda true, out: mean_squared_error(true, out[0]))	# out = (pred, repr)
+		self.model.compile(Adam(), loss=lambda true, out: mean_squared_error(true, out[0]))	# out = (pred, repr)
 
 	@staticmethod
 	def create_encoder(repr_size):
 		inp = out = Input(shape=(*imgdims, 1))
 		out = Reshape((*imgdims, 1))(out)
 
-		out = Conv2D(64, (8, 8), strides=1, padding='same')(out)	# -> 28x28x64
+		out = Conv2D(64, (8, 8), padding='same')(out)	# -> 28x28x64
 		out = Conv2D(repr_size, 1, padding='same')(out)				# -> 28x28x1
 		out = BatchNormalization()(out)
-		# out = Activation('sigmoid')(out)
+		out = Activation('sigmoid')(out)
 
 		return Model(inp, out, name='encoder')
 
 	@staticmethod
 	def create_decoder(repr_size):
-		inp = out = Input(shape=(*imgdims, repr_size,))				# -> 28x28x8
-		out = Conv2D(64, (3, 3), strides=1, padding='same')(out)	# -> 28x28x64
-		out = Conv2D(1, (8, 8), strides=1, padding='same')(out)		# -> 28x28x1
-		# out = Dense(28*28)(out)
+		inp = out = Input(shape=(*imgdims, 1))
+		out = Conv2D(32, (8, 8), padding='same')(out)
+		out = Conv2DTranspose(1, (8, 8), padding='same')(out)
 		out = BatchNormalization()(out)
 		out = Activation('sigmoid')(out)
 		out = Reshape((*imgdims, 1))(out)
@@ -139,6 +137,7 @@ class AutoEncoder:
 class GANModel:
 	def __init__(self):
 		self.vae = AutoEncoder()
+
 		self.discriminator = self.create_discriminator()
 		self.discriminator.compile('adam', loss='binary_crossentropy')
 
@@ -152,10 +151,11 @@ class GANModel:
 
 	@staticmethod
 	def create_discriminator():
-		inp = Input(shape=(*imgdims, 1))
-		out = Conv2D(2*repr_size, kernel_size=(8, 8), strides=4)(inp)
-		out = Conv2D(4*repr_size, kernel_size=(4, 4), strides=2)(out)
+		out = inp = Input(shape=(*imgdims, 1))
+		# out = Conv2D(2*repr_size, kernel_size=(8, 8), strides=4)(out)
+		# out = Conv2D(4*repr_size, kernel_size=(4, 4), strides=3)(out)
 		out = Flatten()(out)
+		out = Dense(256)(out)
 		out = Dense(1, activation='sigmoid')(out)
 
 		return Model(inp, out, name='disc')
@@ -205,6 +205,8 @@ fmap_palette = np.array([
 ])
 
 def main():
+	model = GANModel()
+
 	opts = input('Load Encoder? Decoder? Discriminator? [nnn]: ')
 	opts = opts if opts != '' else 'nnn'
 	if opts[0] == 'y':
@@ -214,6 +216,7 @@ def main():
 	if opts[2] == 'y':
 		model.discriminator.load_weights('weights_disc.h5')
 
+	model.vae.encoder.summary()
 	model.discriminator.summary()
 	model.complete_model.summary()
 

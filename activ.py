@@ -8,6 +8,7 @@ from main import GANModel, AutoEncoder
 
 plt.rcParams['figure.figsize'] = (12, 12)
 encoder = load_model('weights_enc.h5')
+encoder.summary()
 
 for filter_no in range(64):
     print("Visualizing filter", filter_no)
