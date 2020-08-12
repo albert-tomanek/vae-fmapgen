@@ -21,6 +21,8 @@ EPOCHS = 2400
 repr_size = 8
 imgdims = (96, 96)
 
+DUMMY_REPR = np.zeros((BATCH_SIZE, *imgdims, repr_size))
+
 def identical_shuffle(a: np.array, b: np.array):
 	order = np.arange(len(a))
 	np.random.shuffle(order)
@@ -41,7 +43,7 @@ def quantize_fn(x):
 def img_variety(x):
 	a = tf.reshape(x, [-1])					# Make it a 1D array
 	b = tf.concat([tf.zeros((1), dtype=x.dtype), a[:-1]], axis=-1)	# Shift by 1
-	return tf.reduce_sum(tf.square(tf.math.tanh(tf.cast(a - b, tf.float32))))	# The tanh is there to make all differences greater than 0 the same size.
+	return tf.reduce_sum(tf.math.tanh(3 * tf.abs(tf.cast(a - b, tf.float32))))	# The tanh is there to make all differences greater than 0 the same size.
 
 class AutoEncoder:
 	def __init__(self):
@@ -93,11 +95,13 @@ class AutoEncoder:
 		sample_img = random.choice(next(gen)[0])
 		out, repr = self.model.predict(sample_img.reshape((1, *sample_img.shape)))
 
+		indexed = np.argmax(repr, axis=-1)
+
 		wandb.log({
 			"img_x": wandb.Image(sample_img),
-			"img_map": wandb.Image(fmap_palette[np.argmax(repr, axis=-1)]),
+			"img_map": wandb.Image(fmap_palette[indexed]),
 			"img_y": wandb.Image(out),
-			"repr_variance": float(img_variety(repr))
+			"repr_variance": float(img_variety(indexed))
 		})
 
 	def on_batch_end(self, batch, logs):
@@ -130,7 +134,7 @@ class AutoEncoder:
 	def datagen_fix(gen):
 		while True:
 			batch = next(gen)
-			yield batch, [batch, np.zeros((BATCH_SIZE, *imgdims, repr_size))]	# The repr is a placeholder and isn't actually used to calculate loss. Keras just expects it to be present as an input.
+			yield batch, [batch, DUMMY_REPR]	# The repr is a placeholder and isn't actually used to calculate loss. Keras just expects it to be present as an input.
 
 	@staticmethod
 	def triangle(max_x, max_y):
@@ -153,8 +157,8 @@ class GANModel:
 		self.discriminator.trainable = False
 		disc = self.discriminator(fake)
 
-		self.complete_model = Model(inp, disc, name='vae_gan')
-		self.complete_model.compile('adam', loss=lambda true, out: binary_crossentropy(true, out) + img_variety(tf.argmax(out[1])))
+		self.complete_model = Model(inp, [disc, repr], name='vae_gan')
+		self.complete_model.compile('adam', loss=lambda true, out: binary_crossentropy(true[0], out[0]) + img_variety(tf.argmax(out[1])))
 
 	@staticmethod
 	def create_discriminator():
@@ -189,15 +193,17 @@ class GANModel:
 			x_jumbled, y_jumbled = identical_shuffle(x_jumbled, y_jumbled)
 			# disc_batch_size = BATCH_SIZE / log10(vae_loss) - log10(disc_loss)
 
-			history = self.discriminator.fit(x_jumbled, y_jumbled)
+			history = self.discriminator.fit(x_jumbled, [y_jumbled, DUMMY_REPR])
 			wandb.log({"disc_loss": history.history['loss'][0]})
 
 			# Train VAE (generator) to fake
-			history = self.complete_model.fit(imgs[:BATCH_SIZE], np.ones(BATCH_SIZE))
+			history = self.complete_model.fit(imgs[:BATCH_SIZE], [np.ones(BATCH_SIZE), DUMMY_REPR])
 			wandb.log({"gen_loss": history.history['loss'][0]})
 
-			if i % 8 == 0:
+			if i % 1 == 0:
 				self.vae.log_example(datagen)
+				true = y_jumbled
+				out = self.complete_model.predict(x_jumbled)
 
 fmap_palette = np.array([
 	[  0,   0,   0],
@@ -219,16 +225,16 @@ fmap_palette = np.array([
 ])
 
 def faces_datagen():
-    import urllib.request, io, os, random
-    path = '../input/flickrfaceshq-dataset-ffhq/'
-    files = os.listdir(path)
-    while True:
-        batch = np.zeros((BATCH_SIZE, *imgdims))
-        for i in range(BATCH_SIZE):
-            img = Image.open(path + random.choice(files))
-            img = img.resize((96,96)).convert('L')
-            batch[i] = np.array(img)
-        yield np.expand_dims(batch, -1)
+	import urllib.request, io, os, random
+	path = '../input/flickrfaceshq-dataset-ffhq/'
+	files = os.listdir(path)
+	while True:
+		batch = np.zeros((BATCH_SIZE, *imgdims))
+		for i in range(BATCH_SIZE):
+			img = Image.open(path + random.choice(files))
+			img = img.resize((96,96)).convert('L')
+			batch[i] = np.array(img)
+		yield np.expand_dims(batch, -1)
 
 def main():
 	model = GANModel()
