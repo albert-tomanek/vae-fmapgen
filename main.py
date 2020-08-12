@@ -50,8 +50,8 @@ class AutoEncoder:
 
 		inp  = out = Input(shape=(*imgdims, 1))
 		repr = self.encoder(out)
-		# qtz  = Lambda(quantize_fn)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
-		qtz  = Lambda(lambda x: K.cast_to_floatx(K.argmax(x)), output_shape=(*imgdims, 1))(repr)
+		qtz  = Lambda(quantize_fn)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
+		# qtz  = Lambda(lambda x: K.cast_to_floatx(K.argmax(x)), output_shape=(*imgdims, 1))(repr)
 		out  = self.decoder(qtz)
 		out  = Lambda(lambda x: x * 255)(out)
 		self.model = Model(inp, [out, repr], name='vae')
@@ -62,7 +62,7 @@ class AutoEncoder:
 		inp = out = Input(shape=(*imgdims, 1))
 		out = Reshape((*imgdims, 1))(out)
 
-		out = Conv2D(64, (8, 8), padding='same')(out)	# -> 28x28x64
+		out = Conv2D(64, (12, 12), padding='same')(out)	# -> 28x28x64
 		out = Conv2D(repr_size, 1, padding='same')(out)				# -> 28x28x1
 		out = BatchNormalization()(out)
 		out = Activation('sigmoid')(out)
@@ -71,7 +71,8 @@ class AutoEncoder:
 
 	@staticmethod
 	def create_decoder(repr_size):
-		inp = out = Input(shape=(*imgdims, 1))
+		inp = out = Input(shape=(*imgdims, repr_size))
+		out = Conv2D(64, (12, 12), padding='same')(out)
 		out = Conv2D(32, (8, 8), padding='same')(out)
 		out = Conv2DTranspose(1, (8, 8), padding='same')(out)
 		out = BatchNormalization()(out)
