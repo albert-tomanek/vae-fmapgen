@@ -123,7 +123,13 @@ class AutoEncoder:
 			mean = np.mean(batch, -1)
 			mean = mean.repeat(1, -1).reshape(BATCH_SIZE, *imgdims, 1)
 			batch = mean
-			yield batch, [batch, np.zeros((BATCH_SIZE, *imgdims, repr_size))]	# The repr is a placeholder and isn't actually used to calculate loss.
+			yield batch
+
+	@staticmethod
+	def datagen_fix(gen):
+		while True:
+			batch = next(gen)
+			yield batch, [batch, np.zeros((BATCH_SIZE, *imgdims, repr_size))]	# The repr is a placeholder and isn't actually used to calculate loss. Keras just expects it to be present as an input.
 
 	@staticmethod
 	def triangle(max_x, max_y):
@@ -154,13 +160,20 @@ class GANModel:
 		out = inp = Input(shape=(*imgdims, 1))
 		# out = Conv2D(2*repr_size, kernel_size=(8, 8), strides=4)(out)
 		# out = Conv2D(4*repr_size, kernel_size=(4, 4), strides=3)(out)
+		out = Lambda(lambda x: K.repeat_elements(x, 3, -1))(out)
+		vgg = keras.applications.vgg19.VGG19(input_shape=(96, 96, 3), include_top=False, weights='imagenet')
+		for layer in vgg.layers:
+			layer.trainable=False
+		vgg = Model(vgg.input, vgg.get_layer('block4_conv2').output)
+		out = vgg(out)
 		out = Flatten()(out)
-		out = Dense(256)(out)
+		# out = Dense(256)(out)
 		out = Dense(1, activation='sigmoid')(out)
 
 		return Model(inp, out, name='disc')
 
-	def train(self, datagen):				# The generater is expected to output in the format of AutoEncoder.datagen
+	def train(self, datagen):
+		datagen = AutoEncoder.datagen_fix(datagen)	# Keras expects an Y for repr (the network has two outputs), so this wrapper generates a dummy array
 		for i in range(EPOCHS):
 			imgs: np.ndarray = next(datagen)[0]
 			HALF_BATCH = BATCH_SIZE // 2
@@ -203,6 +216,18 @@ fmap_palette = np.array([
 	[  0, 255, 255],
 	[255, 255, 255]
 ])
+
+def faces_datagen():
+    import urllib.request, io, os, random
+    path = '../input/flickrfaceshq-dataset-ffhq/'
+    files = os.listdir(path)
+    while True:
+        batch = np.zeros((BATCH_SIZE, *imgdims))
+        for i in range(BATCH_SIZE):
+            img = Image.open(path + random.choice(files))
+            img = img.resize((96,96)).convert('L')
+            batch[i] = np.array(img)
+        yield np.expand_dims(batch, -1)
 
 def main():
 	model = GANModel()
