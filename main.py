@@ -34,12 +34,6 @@ def shift(a: np.array, n):
 	b[:n] = a[-n:]
 	return b
 
-@tf.custom_gradient
-def quantize_fn(x):
-	def grad(dy):
-		return dy * 0	# Gradient is *probably* 0
-	return tf.one_hot(tf.argmax(x, axis=-1), repr_size), grad
-
 def img_variety(x):
 	a = tf.reshape(x, [-1])					# Make it a 1D array
 	b = tf.concat([tf.zeros((1), dtype=x.dtype), a[:-1]], axis=-1)	# Shift by 1
@@ -52,7 +46,8 @@ class AutoEncoder:
 
 		inp  = out = Input(shape=(*imgdims, 1))
 		repr = self.encoder(out)
-		qtz  = Lambda(quantize_fn)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
+		qtz  = Activation('softmax')(repr)
+		# qtz  = Lambda(quantize_fn)(repr)		# Puts a 1 at only those positions with the highest value. The rest is 0 so when multiplied by the original will be blank.
 		# qtz  = Lambda(lambda x: K.cast_to_floatx(K.argmax(x)), output_shape=(*imgdims, 1))(repr)
 		out  = self.decoder(qtz)
 		out  = Lambda(lambda x: x * 255)(out)
@@ -64,19 +59,18 @@ class AutoEncoder:
 		inp = out = Input(shape=(*imgdims, 1))
 		out = Reshape((*imgdims, 1))(out)
 
-		out = Conv2D(64, (12, 12), padding='same')(out)	# -> 28x28x64
-		out = Conv2D(repr_size, 1, padding='same')(out)				# -> 28x28x1
+		out = Conv2D(64, (12, 12), padding='same')(out)
+		out = Conv2D(repr_size, 1, padding='same')(out)
 		out = BatchNormalization()(out)
-		out = Activation('sigmoid')(out)
 
 		return Model(inp, out, name='encoder')
 
 	@staticmethod
 	def create_decoder(repr_size):
 		inp = out = Input(shape=(*imgdims, repr_size))
-		out = Conv2D(64, (12, 12), padding='same')(out)
-		out = Conv2D(32, (8, 8), padding='same')(out)
-		out = Conv2DTranspose(1, (8, 8), padding='same')(out)
+		out = Conv2D(64, (3, 3), padding='same')(out)
+# 		out = Conv2D(32, (8, 8), padding='same')(out)
+		out = Conv2DTranspose(1, (12, 12), padding='same')(out)
 		out = BatchNormalization()(out)
 		out = Activation('sigmoid')(out)
 		out = Reshape((*imgdims, 1))(out)
@@ -148,9 +142,12 @@ class AutoEncoder:
 class GANModel:
 	def __init__(self):
 		self.vae = AutoEncoder()
-
+# 		def disc_loss_fn(true, out):
+# 			tf.print(true)
+# 			tf.print(out)
+# 			return binary_crossentropy(true, out)
 		self.discriminator = self.create_discriminator()
-		self.discriminator.compile('adam', loss='binary_crossentropy')
+		self.discriminator.compile(Adam(lr=1e-4), loss='binary_crossentropy')
 
 		inp = Input(shape=(*imgdims, 1))
 		fake, repr = self.vae.model(inp)
@@ -158,21 +155,22 @@ class GANModel:
 		disc = self.discriminator(fake)
 
 		self.complete_model = Model(inp, [disc, repr], name='vae_gan')
-		self.complete_model.compile('adam', loss=lambda true, out: binary_crossentropy(true[0], out[0]) + img_variety(tf.argmax(out[1])))
+		self.complete_model.compile('adam', loss=lambda true, out: binary_crossentropy(true[0], out[0]))	#+ img_variety(tf.argmax(out[1]))
 
 	@staticmethod
 	def create_discriminator():
 		out = inp = Input(shape=(*imgdims, 1))
-		# out = Conv2D(2*repr_size, kernel_size=(8, 8), strides=4)(out)
-		# out = Conv2D(4*repr_size, kernel_size=(4, 4), strides=3)(out)
-		out = Lambda(lambda x: K.repeat_elements(x, 3, -1))(out)
-		vgg = keras.applications.vgg19.VGG19(input_shape=(96, 96, 3), include_top=False, weights='imagenet')
-		for layer in vgg.layers:
-			layer.trainable=False
-		vgg = Model(vgg.input, vgg.get_layer('block4_conv2').output)
-		out = vgg(out)
+		out = Conv2D(2*repr_size, kernel_size=(16, 16), strides=4)(out)
+		out = Conv2D(4*repr_size, kernel_size=(4, 4), strides=3)(out)
+# 		out = Lambda(lambda x: K.repeat_elements(x, 3, -1))(out)
+# 		vgg = keras.applications.vgg19.VGG19(input_shape=(96, 96, 3), include_top=False, weights='imagenet')
+# 		for layer in vgg.layers:
+# 			layer.trainable=False
+# 		vgg = Model(vgg.input, vgg.get_layer('block4_conv2').output)
+# 		out = vgg(out)
 		out = Flatten()(out)
-		# out = Dense(256)(out)
+# 		out = Dropout(0.9)(out)
+		out = Dense(32)(out)
 		out = Dense(1, activation='sigmoid')(out)
 
 		return Model(inp, out, name='disc')
@@ -187,23 +185,25 @@ class GANModel:
 			x_jumbled = np.zeros((BATCH_SIZE, *imgdims, 1))
 			x_jumbled[HALF_BATCH:] = self.vae.model.predict(imgs[HALF_BATCH:])[0]
 			x_jumbled[:HALF_BATCH] = imgs[HALF_BATCH:]
+			# print('FAKE:')
+			# plt.imshow(np.reshape(x_jumbled[-1], imgdims))
+			# print('LEGIT:')
+			# plt.imshow(np.reshape(x_jumbled[0], imgdims))
 
 			y_jumbled = np.zeros((BATCH_SIZE))
 			y_jumbled[:HALF_BATCH] = 1
 			x_jumbled, y_jumbled = identical_shuffle(x_jumbled, y_jumbled)
 			# disc_batch_size = BATCH_SIZE / log10(vae_loss) - log10(disc_loss)
 
-			history = self.discriminator.fit(x_jumbled, [y_jumbled, DUMMY_REPR])
+			history = self.discriminator.fit(x_jumbled, y_jumbled)
 			wandb.log({"disc_loss": history.history['loss'][0]})
 
 			# Train VAE (generator) to fake
 			history = self.complete_model.fit(imgs[:BATCH_SIZE], [np.ones(BATCH_SIZE), DUMMY_REPR])
 			wandb.log({"gen_loss": history.history['loss'][0]})
 
-			if i % 1 == 0:
+			if i % 21== 0:
 				self.vae.log_example(datagen)
-				true = y_jumbled
-				out = self.complete_model.predict(x_jumbled)
 
 fmap_palette = np.array([
 	[  0,   0,   0],
