@@ -15,9 +15,10 @@ from tensorflow.keras.layers import Layer, Input, Lambda, concatenate, Dense, Dr
 from tensorflow.keras.callbacks import LambdaCallback
 from tensorflow.keras.losses import mean_squared_error, binary_crossentropy
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.activations import softplus
 
 BATCH_SIZE = 32
-EPOCHS = 2400
+EPOCHS = 4800
 repr_size = 8
 imgdims = (96, 96)
 
@@ -87,14 +88,17 @@ class AutoEncoder:
 
 	def log_example(self, gen):
 		sample_img = random.choice(next(gen)[0])
-		out, repr = self.model.predict(sample_img.reshape((1, *sample_img.shape)))
+		out_cheat, repr = self.model.predict(sample_img.reshape((1, *sample_img.shape)))
 
 		indexed = np.argmax(repr, axis=-1)
+		repr = np.array(tf.one_hot(indexed, depth=repr_size))
+		out = self.decoder.predict(repr)
 
 		wandb.log({
 			"img_x": wandb.Image(sample_img),
 			"img_map": wandb.Image(fmap_palette[indexed]),
 			"img_y": wandb.Image(out),
+			"img_y_cheat": wandb.Image(out_cheat),
 			"repr_variance": float(img_variety(indexed))
 		})
 
@@ -107,14 +111,14 @@ class AutoEncoder:
 	def datagen():
 		textures = [Image.open('textures/' + file) for file in os.listdir('textures') if file.endswith('.jpg')]
 		while True:
-			batch = np.zeros((BATCH_SIZE, *imgdims, 3))
+			batch = np.zeros((BATCH_SIZE, *imgdims, 1))
 			for i in range(BATCH_SIZE):
 				img = np.array(random.choice(textures).copy())
 				for _ in range(4):
 					polygon = AutoEncoder.triangle(*imgdims)
 					mask = Image.new('1', imgdims, 0)
 					ImageDraw.Draw(mask).polygon(polygon, fill=1, outline=1)
-					mask = np.array(mask, dtype=np.uint8).repeat(3, axis=-1).reshape((*imgdims, 3))
+					mask = np.array(mask, dtype=np.uint8).repeat(3, axis=-1).reshape((*imgdims, 1))
 					overlay = np.array(random.choice(textures))
 					img = img * (1 - mask) + overlay * mask
 
@@ -155,7 +159,7 @@ class GANModel:
 		disc = self.discriminator(fake)
 
 		self.complete_model = Model(inp, [disc, repr], name='vae_gan')
-		self.complete_model.compile('adam', loss=lambda true, out: binary_crossentropy(true[0], out[0]))	#+ img_variety(tf.argmax(out[1]))
+		self.complete_model.compile('adam', loss=lambda true, out: binary_crossentropy(true[0], out[0]) + softplus(img_variety(tf.argmax(out[1])) - 1000) / 100)
 
 	@staticmethod
 	def create_discriminator():
@@ -237,27 +241,33 @@ def faces_datagen():
 		yield np.expand_dims(batch, -1)
 
 def main():
+	import wandb
+	wandb.init(project="vae-maskgen")
+
 	model = GANModel()
 
 	opts = input('Load Encoder? Decoder? Discriminator? [nnn]: ')
 	opts = opts if opts != '' else 'nnn'
 	if opts[0] == 'y':
-		model.vae.encoder.load_weights('weights_enc.h5')
+	    model.vae.encoder.load_weights('weights_enc.h5')
 	if opts[1] == 'y':
-		model.vae.decoder.load_weights('weights_dec.h5')
+	    model.vae.decoder.load_weights('weights_dec.h5')
 	if opts[2] == 'y':
-		model.discriminator.load_weights('weights_disc.h5')
+	    model.discriminator.load_weights('weights_disc.h5')
 
 	model.vae.encoder.summary()
+	model.vae.decoder.summary()
 	model.discriminator.summary()
 	model.complete_model.summary()
 
 	try:
-		model.train(model.vae.datagen())
+	    model.train(model.vae.datagen())
+	    # model.train(faces_datagen())
 	finally:
-		model.vae.encoder.save('weights_enc.h5')
-		model.vae.decoder.save('weights_dec.h5')
-		model.discriminator.save('weights_disc.h5')
+	    model.vae.encoder.save('weights_enc.h5')
+	    model.vae.decoder.save('weights_dec.h5')
+	    model.discriminator.save('weights_disc.h5')
+
 
 if __name__ == "__main__":
 	import wandb
